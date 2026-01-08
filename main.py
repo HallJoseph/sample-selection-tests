@@ -30,6 +30,54 @@ def integrand(lx, z, phi_star, lx_star, alpha):
     return phi_l * comovol
 
 
+def sigmoid(x, y, A, B, C, D):
+    x_part = 1 / (1 + np.exp(A*x + B))
+    y_part = 1 / (1 + np.exp(C*y + D))
+    return x_part * y_part
+
+
+def model_counts(axes, theta: tuple, schechter_pred):
+    sigmoid_vals = np.zeros_like(schechter_pred)
+    for zind, z in axes[0]:
+        for lind, l in enumerate(axes[1]):
+            sigmoid_vals[zind][lind] = sigmoid(z, l, *theta)
+
+    return schechter_pred * sigmoid_vals
+
+
+def lnprob(theta, axes, data, model_func, **kwargs):
+    model = model_func(axes, theta, **kwargs)
+    kwargs_factorials = kwargs.get('data_log_factorials')
+    data_log_factorials = kwargs_factorials if kwargs_factorials is not None else calculate_log_factorials(data)
+
+    return np.sum(-model + data * np.log(model) - data_log_factorials)
+
+
+def uniform_nonzero_prior(theta):
+    if any(np.array(theta) < 0):
+        return -np.inf
+    return 0
+
+def log_probability(theta, x, data, model_func, prior_func=uniform_nonzero_prior, **kwargs):
+    """
+    Log probability function for the MCMC
+    :param theta: Model parameters
+    :param x: The x-axis of the data to evaluate the model on
+    :param data: Observed data
+    :param model_func: The model function to be used
+    :param prior_func: Function for the priors of the model
+    :return:
+    """
+    lp = prior_func(theta)
+    # print("prior", lp)
+    if not np.isfinite(lp):
+        return -np.inf
+    prob = lp + lnprob(theta, x, data, model_func, **kwargs)
+    if np.isnan(prob):
+        return -np.inf
+    return prob
+
+
 def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.1085567827):
     # Using WARPS/REFLEX XLF 
     phi_star = 2.94e-7 # * (u.Mpc ** -3)
@@ -60,6 +108,8 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     
     # Convert grid from clusters per sr to just clusters:
     schechter_grid *= sample_area
+
+    # Do some emcee to constrain sigmoid
 
     plt.imshow(schechter_grid.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
                aspect="auto", origin="lower")
