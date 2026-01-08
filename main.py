@@ -6,6 +6,13 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
 
+from astropy.cosmology import FlatLambdaCDM
+
+H0 = 70
+COSMO = FlatLambdaCDM(H0, 0.3)
+LITLLE_H = H0/100
+
+print(COSMO.differential_comoving_volume(0.1))
 
 def xlf_schechter(lx, phi_star, lx_star, alpha):
     return (phi_star * ((lx/lx_star)**-alpha) * np.exp(-lx/lx_star) * 1/lx_star)
@@ -19,11 +26,14 @@ def main():
     lumins = np.logspace(42, 45.3)*u.erg/u.second
 
     fig, ax = plt.subplots()
-    ax.plot(lumins, xlf_schechter(lumins, phi_star, l_star, alpha) * 1e44)
+    ax.plot(lumins, xlf_schechter(lumins, phi_star, l_star, alpha))
     ax.set_yscale('log')
     ax.set_xscale('log')
+    ax.set_xlabel("Luminosity [erg s^-1]")
+    ax.set_ylabel("$\phi$ [Mpc^-3 (erg s^-1)^-1]")
     plt.show()
 
 
 if __name__ == "__main__":
     main()
+    pass
