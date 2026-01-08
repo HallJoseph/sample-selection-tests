@@ -40,6 +40,8 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     # Load in the sample catalogue and set up histogram grid
     emain, wh = load_catalogue(sample_path)
 
+    # Constrain z range of emain to remove "fuzz"
+    emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
     histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
     z_bins = histo2d[1]
     lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
@@ -59,11 +61,11 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     # Convert grid from clusters per sr to just clusters:
     schechter_grid *= sample_area
 
-    plt.imshow(schechter_grid.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    plt.imshow(schechter_grid.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
                aspect="auto", origin="lower")
     plt.ylabel("log(L_500)")
     plt.xlabel("Redshift")
-    plt.colorbar(label="N clust")
+    plt.colorbar(label="N clust exp - N clust obs")
     plt.show()
     return
 
