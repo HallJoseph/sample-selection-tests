@@ -3,8 +3,10 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
+from scipy.integrate import dblquad
 from load_catalogue import load_catalogue
 
 
@@ -19,7 +21,7 @@ def xlf_schechter(lx, phi_star, lx_star, alpha):
 
 def integrand(lx, z, phi_star, lx_star, alpha):
     # Get comoving volume
-    comovol = COSMO.differential_comoving_volume(z)
+    comovol = COSMO.differential_comoving_volume(z).value
 
     # Get Schechter func value
     phi_l = xlf_schechter(lx, phi_star, lx_star, alpha)
@@ -28,22 +30,41 @@ def integrand(lx, z, phi_star, lx_star, alpha):
     return phi_l * comovol
 
 
-def main(sample_path="data/emain_wen-han_final_20250328_1052"):
+def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.1085567827):
     # Using WARPS/REFLEX XLF 
-    phi_star = 2.94e-7 * (u.Mpc ** -3)
-    l_star = 2.64e44 * u.erg / u.second
+    phi_star = 2.94e-7 # * (u.Mpc ** -3)
+    l_star = 2.64e44 # * u.erg / u.second
     alpha = 1.69
-    lumins = np.logspace(42, 45.3)*u.erg/u.second
+    lumins = np.logspace(42, 45.3)# *u.erg/u.second
 
-    # Integrate Schechter with respect to L
-    print(integrand(lumins[0], 0.14, phi_star, l_star, alpha))
-
+    # Load in the sample catalogue and set up histogram grid
     emain, wh = load_catalogue(sample_path)
-    print(emain.columns)
 
-    grid = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
-    print(grid)
+    histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
+    z_bins = histo2d[1]
+    lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
 
+    # Set up grid of expected values from Schechter function for these bins
+    schechter_grid = np.zeros_like(histo2d[0])
+    for zind, z_lo in enumerate(z_bins[:-1]):
+        z_hi = z_bins[zind+1]
+        for lind, l_lo in enumerate(lumin_bins[:-1]):
+            l_hi = lumin_bins[lind+1]
+
+            # Evaluate schechter function for this bin
+            schechter_pred = dblquad(integrand, z_lo, z_hi, l_lo, l_hi, args=(phi_star, l_star, alpha))# * 1/u.sr
+            # print(z_lo, l_lo, schechter_pred)
+            schechter_grid[zind][lind] = schechter_pred[0]
+    
+    # Convert grid from clusters per sr to just clusters:
+    schechter_grid *= sample_area
+
+    plt.imshow(schechter_grid.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("log(L_500)")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="N clust")
+    plt.show()
     return
 
     plt.ylabel("log(L_500) (From eRASS catalogue)")
