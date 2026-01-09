@@ -3,10 +3,14 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+import emcee
+import corner
+import math
 
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
 from scipy.integrate import dblquad
+from scipy.special import factorial
 from load_catalogue import load_catalogue
 
 
@@ -36,26 +40,46 @@ def sigmoid(x, y, A, B, C, D):
     return x_part * y_part
 
 
-def model_counts(axes, theta: tuple, schechter_pred):
+def model_counts(axes, theta: tuple, **kwargs):
+    schechter_pred = kwargs['schechter_pred']
     sigmoid_vals = np.zeros_like(schechter_pred)
-    for zind, z in axes[0]:
+    for zind, z in enumerate(axes[0]):
         for lind, l in enumerate(axes[1]):
             sigmoid_vals[zind][lind] = sigmoid(z, l, *theta)
 
     return schechter_pred * sigmoid_vals
 
 
+def calculate_log_factorials(data):
+    """
+    Calculate the factorials of the data and return the log of the factorials
+    :param data: The data to be fit
+    :return: The factorials of the data
+    """
+    log_factorials = np.log(factorial(data))  # Calculate the factorials of the data using scipy
+    # Check if any are infinite
+    if np.any(np.isinf(log_factorials)):
+        try:
+            # Try to calculate the factorials using a for loop and math.factorial
+            log_factorials = np.log(np.array([float(math.factorial(int(d))) for d in data]))
+        except:
+            # If that fails, use Stirling's approximation to calculate the factorials
+            log_factorials = data * np.log(data) - data + 0.5 * np.log(2 * np.pi * data)
+
+    return log_factorials
+
+
 def lnprob(theta, axes, data, model_func, **kwargs):
-    model = model_func(axes, theta, **kwargs)
     kwargs_factorials = kwargs.get('data_log_factorials')
     data_log_factorials = kwargs_factorials if kwargs_factorials is not None else calculate_log_factorials(data)
+    model = model_func(axes, theta, **kwargs)
 
     return np.sum(-model + data * np.log(model) - data_log_factorials)
 
 
 def uniform_nonzero_prior(theta):
-    if any(np.array(theta) < 0):
-        return -np.inf
+    #if any(np.array(theta) < 0):
+    #    return -np.inf
     return 0
 
 def log_probability(theta, x, data, model_func, prior_func=uniform_nonzero_prior, **kwargs):
@@ -109,7 +133,34 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     # Convert grid from clusters per sr to just clusters:
     schechter_grid *= sample_area
 
+    # Get midpoints
+    mid_points = [(z_bins[1:] + z_bins[:-1])/2, (lumin_bins[1:] + lumin_bins[:-1])/2]
+
     # Do some emcee to constrain sigmoid
+    initial_theta = (1, 1, 1, 1)
+    ndim, nwalkers = 4, 100
+    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
+                                    args=(mid_points, histo2d[0], model_counts),
+                                    kwargs={"schechter_pred": schechter_grid, 
+                                            "data_log_factorials": calculate_log_factorials(histo2d[0])})
+    sampler.run_mcmc(pos, 5000, progress=True)
+
+    # Get the samples and do a corner plot
+    flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)  # Using 100 steps as burn in and thinning by 15
+    fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
+    plt.show()
+
+    # Plot the chains
+    fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
+    samples = sampler.get_chain()
+    labels = ["A", "B", "C", "D"]
+    for aid, ax in enumerate(axes):
+        ax.plot(samples[:, :, aid], "k", alpha=0.3)
+        ax.set_xlim(0, len(samples))
+        ax.set_ylabel(labels[aid])
+    axes[-1].set_xlabel("step number")
+    plt.show()
 
     plt.imshow(schechter_grid.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
                aspect="auto", origin="lower")
@@ -135,4 +186,3 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
 
 if __name__ == "__main__":
     main()
-    pass
