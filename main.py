@@ -35,8 +35,8 @@ def integrand(lx, z, phi_star, lx_star, alpha):
 
 
 def sigmoid(x, y, A, B, C, D):
-    x_part = 1 / (1 + np.exp(A*x + B))
-    y_part = 1 / (1 + np.exp(C*y + D))
+    x_part = 1 / (1 + np.exp(A*(B-x)))
+    y_part = 1 / (1 + np.exp(C*(D-y)))
     return x_part * y_part
 
 
@@ -45,8 +45,15 @@ def model_counts(axes, theta: tuple, **kwargs):
     sigmoid_vals = np.zeros_like(schechter_pred)
     for zind, z in enumerate(axes[0]):
         for lind, l in enumerate(axes[1]):
-            sigmoid_vals[zind][lind] = sigmoid(z, l, *theta)
-
+            sigmoid_vals[zind][lind] = sigmoid(z, np.log10(l), *theta)
+    
+    # plt.imshow(sigmoid_vals.T, extent=(min(axes[0]), max(axes[0]), np.log10(min(axes[1])), np.log10(max(axes[1]))), aspect="auto", origin="lower")
+    # plt.colorbar()
+    # plt.show()
+    # 
+    # plt.imshow(sigmoid_vals.T*schechter_pred.T, extent=(min(axes[0]), max(axes[0]), np.log10(min(axes[1])), np.log10(max(axes[1]))), aspect="auto", origin="lower")
+    # plt.colorbar()
+    # plt.show()
     return schechter_pred * sigmoid_vals
 
 
@@ -74,13 +81,25 @@ def lnprob(theta, axes, data, model_func, **kwargs):
     data_log_factorials = kwargs_factorials if kwargs_factorials is not None else calculate_log_factorials(data)
     model = model_func(axes, theta, **kwargs)
 
+    # plt.imshow((data-model).T, origin="lower", extent=(min(axes[0]), max(axes[0]), np.log10(min(axes[1])), np.log10(max(axes[1]))), aspect="auto")
+    # plt.colorbar()
+    # plt.show()
+
     return np.sum(-model + data * np.log(model) - data_log_factorials)
 
 
 def uniform_nonzero_prior(theta):
     #if any(np.array(theta) < 0):
     #    return -np.inf
-    return 0
+    A_prior = (-150 <= theta[0]) & (theta[0] <= 0)
+    B_prior = (0 < theta[1]) & (theta[1] < 1)
+    C_prior = (0 < theta[2]) & (theta[2] <= 20)
+    D_prior = (42 < theta[3]) & (theta[3] < 45)
+    if all((A_prior, B_prior, C_prior, D_prior)):
+        return 0
+    else:
+        return -np.inf
+
 
 def log_probability(theta, x, data, model_func, prior_func=uniform_nonzero_prior, **kwargs):
     """
@@ -101,6 +120,63 @@ def log_probability(theta, x, data, model_func, prior_func=uniform_nonzero_prior
         return -np.inf
     return prob
 
+
+def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins):
+    # Do some emcee to constrain sigmoid
+    initial_theta = (-100, 0.2, 5, 43)
+    ndim, nwalkers = 4, 100
+    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
+
+    print(log_probability(initial_theta, mid_points, histo2d[0], model_counts, schechter_pred=schechter_grid, 
+                                            data_log_factorials=calculate_log_factorials(histo2d[0])))
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
+                                    args=(mid_points, histo2d[0], model_counts),
+                                    kwargs={"schechter_pred": schechter_grid, 
+                                            "data_log_factorials": calculate_log_factorials(histo2d[0])})
+    sampler.run_mcmc(pos, 5000, progress=True)
+
+    # Get the samples and do a corner plot
+    flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
+    fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
+    plt.show()
+
+    # Plot the chains
+    fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
+    samples = sampler.get_chain()
+    labels = ["A", "B", "C", "D"]
+    for aid, ax in enumerate(axes):
+        ax.plot(samples[:, :, aid], "k", alpha=0.3)
+        ax.set_xlim(0, len(samples))
+        ax.set_ylabel(labels[aid])
+    axes[-1].set_xlabel("step number")
+    plt.show()
+
+    # Plot median chain values
+    #samples_T = samples.T
+    pred_from_emcee = model_counts(mid_points, np.median(flat_samples.T, axis=1), schechter_pred=schechter_grid)
+
+    plt.imshow((pred_from_emcee/schechter_grid).T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("log(L_500)")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="$\sigma(L, z)$ fraction from sigmoid")
+    plt.show()
+
+    plt.imshow(pred_from_emcee.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("log(L_500)")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="N(L, z) from Schechter and Sigmoid")
+    plt.show()
+
+    plt.imshow(pred_from_emcee.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("log(L_500)")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="N clust exp - N clust obs")
+    plt.show()
+    return
 
 def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.1085567827):
     # Using WARPS/REFLEX XLF 
@@ -136,38 +212,10 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     # Get midpoints
     mid_points = [(z_bins[1:] + z_bins[:-1])/2, (lumin_bins[1:] + lumin_bins[:-1])/2]
 
-    # Do some emcee to constrain sigmoid
-    initial_theta = (1, 1, 1, 1)
-    ndim, nwalkers = 4, 100
-    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
-                                    args=(mid_points, histo2d[0], model_counts),
-                                    kwargs={"schechter_pred": schechter_grid, 
-                                            "data_log_factorials": calculate_log_factorials(histo2d[0])})
-    sampler.run_mcmc(pos, 5000, progress=True)
+    # 2D fit
+    fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins)
 
-    # Get the samples and do a corner plot
-    flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)  # Using 100 steps as burn in and thinning by 15
-    fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
-    plt.show()
-
-    # Plot the chains
-    fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
-    samples = sampler.get_chain()
-    labels = ["A", "B", "C", "D"]
-    for aid, ax in enumerate(axes):
-        ax.plot(samples[:, :, aid], "k", alpha=0.3)
-        ax.set_xlim(0, len(samples))
-        ax.set_ylabel(labels[aid])
-    axes[-1].set_xlabel("step number")
-    plt.show()
-
-    plt.imshow(schechter_grid.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
-               aspect="auto", origin="lower")
-    plt.ylabel("log(L_500)")
-    plt.xlabel("Redshift")
-    plt.colorbar(label="N clust exp - N clust obs")
-    plt.show()
+    # 1D fit
     return
 
     plt.ylabel("log(L_500) (From eRASS catalogue)")
