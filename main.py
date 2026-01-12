@@ -35,8 +35,8 @@ def integrand(lx, z, phi_star, lx_star, alpha):
 
 
 def sigmoid(x, y, A, B, C, D):
-    x_part = 1 / (1 + np.exp(A*(B-x)))
-    y_part = 1 / (1 + np.exp(C*(D-y)))
+    x_part = sigmoid_1D(x, A, B)
+    y_part = sigmoid_1D(y, C, D)
     return x_part * y_part
 
 
@@ -99,9 +99,20 @@ def uniform_nonzero_prior(theta):
         return 0
     else:
         return -np.inf
+    
+
+def uniform_1d_prior(theta):
+    #if any(np.array(theta) < 0):
+    #    return -np.inf
+    A_prior = (10 >= theta[0]) & (theta[0] >= 0)  # -150 <= theta[0]) & 
+    B_prior = (35 < theta[1]) & (theta[1] < 39)
+    if all((A_prior, B_prior)):
+        return 0
+    else:
+        return -np.inf
 
 
-def log_probability(theta, x, data, model_func, prior_func=uniform_nonzero_prior, **kwargs):
+def log_probability(theta, x, data, model_func, prior_func=uniform_1d_prior, **kwargs):
     """
     Log probability function for the MCMC
     :param theta: Model parameters
@@ -178,6 +189,74 @@ def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins):
     plt.show()
     return
 
+
+def calc_fluxes(lz_grid, axes):
+    # Returns fluxes of an lz grid in units of erg / s / Mpc^2
+    flux_ax, counts = [], []
+    for zind, z in enumerate(axes[0]):
+        for lind, l in enumerate(axes[1]):
+            dist = COSMO.luminosity_distance(z) # .to(u.)
+            flux = (l / (4*np.pi*dist**2)).value
+            flux_ax.append(flux)
+            counts.append(lz_grid[zind][lind])
+    
+    return (flux_ax, counts)
+
+
+def model_counts_1d(flux_ax, theta, **kwargs):
+    schechter_pred = kwargs['schechter_pred']
+    sigmoid_vals = sigmoid_1D(np.log10(flux_ax), *theta)
+    #plt.scatter(np.log10(flux_ax), sigmoid_vals)
+    #plt.show()
+    return schechter_pred * sigmoid_vals
+
+
+def fit_1d_grid(schechter_grid, histo2d, mid_points):
+    schechter_fluxes = calc_fluxes(schechter_grid, mid_points)
+    obs_fluxes = calc_fluxes(histo2d[0], mid_points)
+
+    flux_ax = obs_fluxes[0]
+
+    initial_theta = (10, 37)
+    ndim, nwalkers = 2, 100
+    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
+                                    args=(flux_ax, obs_fluxes[1], model_counts_1d),
+                                    kwargs={"schechter_pred": schechter_fluxes[1], 
+                                            "data_log_factorials": calculate_log_factorials(obs_fluxes[1])})
+    sampler.run_mcmc(pos, 5000, progress=True)
+
+    # Get the samples and do a corner plot
+    flat_samples = sampler.get_chain(discard=1000, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
+    fig = corner.corner(flat_samples, labels=["A", "B"], show_titles=True)
+    plt.show()
+
+    # Plot the chains
+    fig, axes = plt.subplots(2, figsize=(10, 7), sharex=True)
+    samples = sampler.get_chain()
+    labels = ["A", "B"]
+    for aid, ax in enumerate(axes):
+        ax.plot(samples[:, :, aid], "k", alpha=0.3)
+        ax.set_xlim(0, len(samples))
+        ax.set_ylabel(labels[aid])
+    axes[-1].set_xlabel("step number")
+    plt.show()
+    
+    pred_from_emcee = model_counts_1d(flux_ax, 
+                                      (5.9, 35.75), 
+                                      schechter_pred=schechter_fluxes[1])
+    plt.scatter(*schechter_fluxes, label="Schechter Function")
+    plt.scatter(*obs_fluxes, label="Observed")
+    plt.scatter(flux_ax, pred_from_emcee)
+    plt.xscale("log")
+    # plt.yscale("log")
+    plt.xlabel("log(flux (erg/s/Mpc^2))")
+    plt.ylabel("count")
+    plt.legend()
+    plt.show()
+
+
 def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.1085567827):
     # Using WARPS/REFLEX XLF 
     phi_star = 2.94e-7 # * (u.Mpc ** -3)
@@ -213,9 +292,10 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     mid_points = [(z_bins[1:] + z_bins[:-1])/2, (lumin_bins[1:] + lumin_bins[:-1])/2]
 
     # 2D fit
-    fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins)
+    #fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins)
 
     # 1D fit
+    fit_1d_grid(schechter_grid, histo2d, mid_points)
     return
 
     plt.ylabel("log(L_500) (From eRASS catalogue)")
