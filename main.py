@@ -291,26 +291,43 @@ def evalaute_schechter_lz(base_grid, z_bins, lumin_bins, sample_area=1.108556782
 def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, log_l_max=48, schechter_sum=548, n_samp=1000):
     # Set up for loops and sample dictionaries for later use
     samples_list = []
-    for x in tqdm.tqdm(range(n_samp), desc="Sampling Schechter"):
-        subsamp_list = []
-        while len(subsamp_list) <= schechter_sum:
-            # Test pair of randomly selected z and l
-            z_test = np.random.uniform(z_min, z_max)
-            l_test = np.random.uniform(log_l_min, log_l_max)
-            schechter_prob = schechter_prob_interp((z_test, l_test))
 
-            # Random selection between 0 and 1, reject if selected number greater than schechter prob
-            if schechter_prob < np.random.uniform(0, 1):
-                continue
-            else:
-                subsamp_list.append({
-                    "z": z_test,
-                    "log_l": l_test,
-                    "sample": x
-                })
-        samples_list += subsamp_list
+    # Define high resolution probability grid
+    z_arr = np.linspace(z_min, z_max, 2000)
+    l_arr = np.linspace(log_l_min, log_l_max, 2000)
+    z_grid, l_grid = np.meshgrid(z_arr, l_arr, indexing="ij")
+    prob_dist = schechter_prob_interp((z_grid, l_grid))
+    prob_dist /= np.sum(prob_dist)
+    z_probs = np.sum(prob_dist, axis=1)
+    
+    # Sample schechter
+    for x in tqdm.tqdm(range(n_samp), desc="Sampling Schechter"):
+        # redshift samples
+        z_choices = np.random.choice(len(z_arr), 548, p=z_probs)
+        z_selects = z_arr[z_choices]
+
+        # Sample luminosities
+        l_probs = prob_dist[z_choices]
+        for z_select, l_prob in zip(z_selects, l_probs):
+            l_select = np.random.choice(l_arr, 1, p=l_prob/np.sum(l_prob))[0]
+            samples_list.append({
+                "sample": x,
+                "z": z_select,
+                "log_l": l_select
+            })
     
     samples_df = pd.DataFrame.from_records(samples_list)
+    samples_df["log_flux"] = samples_df["log_l"] - np.log10((4*np.pi*(COSMO.luminosity_distance(samples_df["z"])**2).value))
+
+    plt.hist2d(samples_df["z"], samples_df["log_l"])
+    plt.colorbar()
+    plt.xlabel("redshift")
+    plt.ylabel("log(L)")
+    plt.show()
+
+    plt.hist(samples_df["log_flux"], bins=25)
+    plt.xlabel("log(flux)")
+    plt.show()
     return samples_df
 
 
@@ -323,6 +340,11 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052"):
     histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
     z_bins = histo2d[1]
     lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
+
+    # Calculate flux of emain clusters
+    emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
+    erosita_flux_hist = np.histogram(emain["log_flux"], bins=25)  #, density=True)
+    flux_midpoints = (erosita_flux_hist[1][1:]+erosita_flux_hist[1][:-1])/2
 
     schechter_grid = evalaute_schechter_lz(histo2d[0], z_bins, lumin_bins)
 
@@ -344,7 +366,7 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052"):
 
     # Normalise schechter function so it sums to 1 (for making a pdf)
     schechter_sum = np.sum(schechter_grid_fine)
-    print(schechter_sum)
+    print(schechter_grid_fine.shape)
     schechter_normalise = schechter_grid_fine / schechter_sum
 
     # Build interpolator with extrapolation for edge cases (fill_value=None)
@@ -357,10 +379,13 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052"):
     # Sample
     sample_df = sample_schechter(schechter_prob_interp, min(z_bins), max(z_bins), 
                                  min(np.log10(lumin_bins)), max(np.log10(lumin_bins)),
-                                 schechter_sum=schechter_sum, n_samp=2)
-    print(sample_df)
-    sample_df["flux"] = (10**sample_df["log_l"]) / (4*np.pi * (COSMO.luminosity_distance(sample_df["z"])**2).value)
-    plt.hist(np.log10(sample_df["flux"]))
+                                 schechter_sum=schechter_sum, n_samp=500)
+    
+    # Bin sampled fluxes to same histogram (roughly) as erosita, working with density for now
+    sample_flux_hist = np.histogram(sample_df["log_flux"], erosita_flux_hist[1])  # , density=True)
+    
+    plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
+    plt.step(flux_midpoints, sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0]), where='mid')
     plt.show()
 
     plt.imshow(schechter_normalise.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
