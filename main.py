@@ -6,11 +6,15 @@ import numpy as np
 import emcee
 import corner
 import math
+import tqdm
+import pandas as pd
 
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
 from scipy.integrate import dblquad
 from scipy.special import factorial
+from scipy.interpolate import RegularGridInterpolator
+
 from load_catalogue import load_catalogue
 
 
@@ -32,6 +36,10 @@ def integrand(lx, z, phi_star, lx_star, alpha):
 
     # Return integrand
     return phi_l * comovol
+
+
+def sigmoid_1D(x, A, B):
+    return 1 / (1 + np.exp(A*(B-x)))
 
 
 def sigmoid(x, y, A, B, C, D):
@@ -257,25 +265,15 @@ def fit_1d_grid(schechter_grid, histo2d, mid_points):
     plt.show()
 
 
-def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.1085567827):
+def evalaute_schechter_lz(base_grid, z_bins, lumin_bins, sample_area=1.1085567827):
     # Using WARPS/REFLEX XLF 
     phi_star = 2.94e-7 # * (u.Mpc ** -3)
     l_star = 2.64e44 # * u.erg / u.second
     alpha = 1.69
-    lumins = np.logspace(42, 45.3)# *u.erg/u.second
-
-    # Load in the sample catalogue and set up histogram grid
-    emain, wh = load_catalogue(sample_path)
-
-    # Constrain z range of emain to remove "fuzz"
-    emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
-    histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
-    z_bins = histo2d[1]
-    lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
 
     # Set up grid of expected values from Schechter function for these bins
-    schechter_grid = np.zeros_like(histo2d[0])
-    for zind, z_lo in enumerate(z_bins[:-1]):
+    schechter_grid = np.zeros_like(base_grid)
+    for zind, z_lo in enumerate(tqdm.tqdm(z_bins[:-1])):
         z_hi = z_bins[zind+1]
         for lind, l_lo in enumerate(lumin_bins[:-1]):
             l_hi = lumin_bins[lind+1]
@@ -287,6 +285,46 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     
     # Convert grid from clusters per sr to just clusters:
     schechter_grid *= sample_area
+    return schechter_grid
+
+
+def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, log_l_max=48, schechter_sum=548, n_samp=1000):
+    # Set up for loops and sample dictionaries for later use
+    samples_list = []
+    for x in tqdm.tqdm(range(n_samp), desc="Sampling Schechter"):
+        subsamp_list = []
+        while len(subsamp_list) <= schechter_sum:
+            # Test pair of randomly selected z and l
+            z_test = np.random.uniform(z_min, z_max)
+            l_test = np.random.uniform(log_l_min, log_l_max)
+            schechter_prob = schechter_prob_interp((z_test, l_test))
+
+            # Random selection between 0 and 1, reject if selected number greater than schechter prob
+            if schechter_prob < np.random.uniform(0, 1):
+                continue
+            else:
+                subsamp_list.append({
+                    "z": z_test,
+                    "log_l": l_test,
+                    "sample": x
+                })
+        samples_list += subsamp_list
+    
+    samples_df = pd.DataFrame.from_records(samples_list)
+    return samples_df
+
+
+def main(sample_path="data/emain_wen-han_final_20250328_1052"):
+    # Load in the sample catalogue and set up histogram grid
+    emain, wh = load_catalogue(sample_path)
+
+    # Constrain z range of emain to remove "fuzz"
+    emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
+    histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
+    z_bins = histo2d[1]
+    lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
+
+    schechter_grid = evalaute_schechter_lz(histo2d[0], z_bins, lumin_bins)
 
     # Get midpoints
     mid_points = [(z_bins[1:] + z_bins[:-1])/2, (lumin_bins[1:] + lumin_bins[:-1])/2]
@@ -295,7 +333,42 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", sample_area=1.108
     #fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins)
 
     # 1D fit
-    fit_1d_grid(schechter_grid, histo2d, mid_points)
+    #fit_1d_grid(schechter_grid, histo2d, mid_points)
+
+    # Fit by sampling the schechter function
+    schechter_grid_fine = np.zeros((50, 50))
+    fine_z_bins = np.linspace(min(z_bins), max(z_bins), 51)
+    fine_l_bins = 10 ** np.linspace(min(np.log10(lumin_bins)), max(np.log10(lumin_bins)), 51)
+    schechter_grid_fine = evalaute_schechter_lz(schechter_grid_fine, fine_z_bins, fine_l_bins)
+    fine_mid_points = [(fine_z_bins[1:] + fine_z_bins[:-1])/2, np.log10((fine_l_bins[1:] + fine_l_bins[:-1])/2)]
+
+    # Normalise schechter function so it sums to 1 (for making a pdf)
+    schechter_sum = np.sum(schechter_grid_fine)
+    print(schechter_sum)
+    schechter_normalise = schechter_grid_fine / schechter_sum
+
+    # Build interpolator with extrapolation for edge cases (fill_value=None)
+    schechter_prob_interp = RegularGridInterpolator(fine_mid_points, schechter_normalise, bounds_error=False, fill_value=None)
+    
+    # Check interpolator
+    # max Z, min L, where the peak should be
+    print(schechter_prob_interp((z_bins[-1], fine_mid_points[1][0])))
+
+    # Sample
+    sample_df = sample_schechter(schechter_prob_interp, min(z_bins), max(z_bins), 
+                                 min(np.log10(lumin_bins)), max(np.log10(lumin_bins)),
+                                 schechter_sum=schechter_sum, n_samp=2)
+    print(sample_df)
+    sample_df["flux"] = (10**sample_df["log_l"]) / (4*np.pi * (COSMO.luminosity_distance(sample_df["z"])**2).value)
+    plt.hist(np.log10(sample_df["flux"]))
+    plt.show()
+
+    plt.imshow(schechter_normalise.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("log(L_500)")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="N(L, z) from Schechter and Sigmoid")
+    plt.show()
     return
 
     plt.ylabel("log(L_500) (From eRASS catalogue)")
