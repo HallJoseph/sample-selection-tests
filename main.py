@@ -112,7 +112,7 @@ def uniform_nonzero_prior(theta):
 def uniform_1d_prior(theta):
     #if any(np.array(theta) < 0):
     #    return -np.inf
-    A_prior = (10 >= theta[0]) & (theta[0] >= 0)  # -150 <= theta[0]) & 
+    A_prior = (15 >= theta[0]) & (theta[0] >= 1)  # -150 <= theta[0]) & 
     B_prior = (35 < theta[1]) & (theta[1] < 39)
     if all((A_prior, B_prior)):
         return 0
@@ -288,7 +288,7 @@ def evalaute_schechter_lz(base_grid, z_bins, lumin_bins, sample_area=1.108556782
     return schechter_grid
 
 
-def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, log_l_max=48, schechter_sum=548, n_samp=1000):
+def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, log_l_max=48, schechter_sum=548, n_samp=1000, do_plot=False):
     # Set up for loops and sample dictionaries for later use
     samples_list = []
 
@@ -319,19 +319,21 @@ def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, 
     samples_df = pd.DataFrame.from_records(samples_list)
     samples_df["log_flux"] = samples_df["log_l"] - np.log10((4*np.pi*(COSMO.luminosity_distance(samples_df["z"])**2).value))
 
-    plt.hist2d(samples_df["z"], samples_df["log_l"])
-    plt.colorbar()
-    plt.xlabel("redshift")
-    plt.ylabel("log(L)")
-    plt.show()
+    if do_plot:
+        plt.hist2d(samples_df["z"], samples_df["log_l"])
+        plt.colorbar()
+        plt.xlabel("redshift")
+        plt.ylabel("log(L)")
+        plt.show()
 
-    plt.hist(samples_df["log_flux"], bins=25)
-    plt.xlabel("log(flux)")
-    plt.show()
+        plt.hist(samples_df["log_flux"], bins=25)
+        plt.xlabel("log(flux)")
+        plt.show()
     return samples_df
 
 
-def main(sample_path="data/emain_wen-han_final_20250328_1052"):
+def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv"):
+    np.random.seed(42)
     # Load in the sample catalogue and set up histogram grid
     emain, wh = load_catalogue(sample_path)
 
@@ -343,10 +345,11 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052"):
 
     # Calculate flux of emain clusters
     emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
-    erosita_flux_hist = np.histogram(emain["log_flux"], bins=25)  #, density=True)
+    erosita_flux_hist = np.histogram(emain["log_flux"], bins=75) #)len(emain["log_flux"]))  #, density=True)
     flux_midpoints = (erosita_flux_hist[1][1:]+erosita_flux_hist[1][:-1])/2
 
     schechter_grid = evalaute_schechter_lz(histo2d[0], z_bins, lumin_bins)
+    schechter_sum = np.sum(schechter_grid)
 
     # Get midpoints
     mid_points = [(z_bins[1:] + z_bins[:-1])/2, (lumin_bins[1:] + lumin_bins[:-1])/2]
@@ -357,37 +360,92 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052"):
     # 1D fit
     #fit_1d_grid(schechter_grid, histo2d, mid_points)
 
-    # Fit by sampling the schechter function
-    schechter_grid_fine = np.zeros((50, 50))
-    fine_z_bins = np.linspace(min(z_bins), max(z_bins), 51)
-    fine_l_bins = 10 ** np.linspace(min(np.log10(lumin_bins)), max(np.log10(lumin_bins)), 51)
-    schechter_grid_fine = evalaute_schechter_lz(schechter_grid_fine, fine_z_bins, fine_l_bins)
-    fine_mid_points = [(fine_z_bins[1:] + fine_z_bins[:-1])/2, np.log10((fine_l_bins[1:] + fine_l_bins[:-1])/2)]
+    # Try to load a pregen schechter path
+    try:
+        sample_df = pd.read_csv(schechter_clust_path)
 
-    # Normalise schechter function so it sums to 1 (for making a pdf)
-    schechter_sum = np.sum(schechter_grid_fine)
-    print(schechter_grid_fine.shape)
-    schechter_normalise = schechter_grid_fine / schechter_sum
+    except Exception as exc:
+        # Fit by sampling the schechter function
+        schechter_grid_fine = np.zeros((50, 50))
+        fine_z_bins = np.linspace(min(z_bins), max(z_bins), 51)
+        fine_l_bins = 10 ** np.linspace(min(np.log10(lumin_bins)), max(np.log10(lumin_bins)), 51)
+        schechter_grid_fine = evalaute_schechter_lz(schechter_grid_fine, fine_z_bins, fine_l_bins)
+        fine_mid_points = [(fine_z_bins[1:] + fine_z_bins[:-1])/2, np.log10((fine_l_bins[1:] + fine_l_bins[:-1])/2)]
 
-    # Build interpolator with extrapolation for edge cases (fill_value=None)
-    schechter_prob_interp = RegularGridInterpolator(fine_mid_points, schechter_normalise, bounds_error=False, fill_value=None)
-    
-    # Check interpolator
-    # max Z, min L, where the peak should be
-    print(schechter_prob_interp((z_bins[-1], fine_mid_points[1][0])))
+        # Normalise schechter function so it sums to 1 (for making a pdf)
+        schechter_sum = np.sum(schechter_grid_fine)
+        print(schechter_grid_fine.shape)
+        schechter_normalise = schechter_grid_fine / schechter_sum
 
-    # Sample
-    sample_df = sample_schechter(schechter_prob_interp, min(z_bins), max(z_bins), 
-                                 min(np.log10(lumin_bins)), max(np.log10(lumin_bins)),
-                                 schechter_sum=schechter_sum, n_samp=500)
+        # Build interpolator with extrapolation for edge cases (fill_value=None)
+        schechter_prob_interp = RegularGridInterpolator(fine_mid_points, schechter_normalise, bounds_error=False, fill_value=None)
+        
+        # Check interpolator
+        # max Z, min L, where the peak should be
+        print(schechter_prob_interp((z_bins[-1], fine_mid_points[1][0])))
+
+        # Sample
+        sample_df = sample_schechter(schechter_prob_interp, min(z_bins), max(z_bins), 
+                                    min(np.log10(lumin_bins)), max(np.log10(lumin_bins)),
+                                    schechter_sum=schechter_sum, n_samp=5000)
+        sample_df.to_csv(schechter_clust_path)
     
     # Bin sampled fluxes to same histogram (roughly) as erosita, working with density for now
     sample_flux_hist = np.histogram(sample_df["log_flux"], erosita_flux_hist[1])  # , density=True)
+    sample_flux_hist_scale = sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0])
     
     plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
-    plt.step(flux_midpoints, sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0]), where='mid')
+    plt.step(flux_midpoints, sample_flux_hist_scale, where='mid')
     plt.show()
 
+    # Now fit a sigmoid to this
+    initial_theta = (10, 37)
+    ndim, nwalkers = 2, 100
+    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
+                                    args=(10**flux_midpoints, erosita_flux_hist[0], model_counts_1d),
+                                    kwargs={"schechter_pred": sample_flux_hist_scale, 
+                                            "data_log_factorials": calculate_log_factorials(erosita_flux_hist[0])})
+    sampler.run_mcmc(pos, 5000, progress=True)
+
+    # Get the samples and do a corner plot
+    flat_samples = sampler.get_chain(discard=1000, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
+    # fig = corner.corner(flat_samples, labels=["A", "B"], show_titles=True)
+    # plt.show()
+
+    # Plot the chains
+    # fig, axes = plt.subplots(2, figsize=(10, 7), sharex=True)
+    # samples = sampler.get_chain()
+    # labels = ["A", "B"]
+    # for aid, ax in enumerate(axes):
+    #     ax.plot(samples[:, :, aid], "k", alpha=0.3)
+    #     ax.set_xlim(0, len(samples))
+    #     ax.set_ylabel(labels[aid])
+    # axes[-1].set_xlabel("step number")
+    plt.show()
+    
+    pred_from_emcee = model_counts_1d(10**flux_midpoints, 
+                                      (np.median(flat_samples.T, axis=1)), 
+                                      schechter_pred=sample_flux_hist_scale)
+    #plt.scatter(flux_midpoints, sample_flux_hist_scale, label="Schechter Function")
+    #plt.scatter(flux_midpoints, erosita_flux_hist[0], label="Observed")
+    #plt.scatter(flux_midpoints, pred_from_emcee)
+    ## plt.yscale("log")
+    #plt.xlabel("log(flux (erg/s/Mpc^2))")
+    #plt.ylabel("count")
+    #plt.legend()
+    #plt.show()
+
+    # Test goodness of fit (posterior predictive p approach)
+    median_res = np.median(flat_samples.T, axis=1)
+    sel_func = sigmoid_1D(flux_midpoints, median_res[0], median_res[1])
+
+    for samp_id in sample_df["sample"].drop_duplicates():
+        print(samp_id)
+
+    return
+    
     plt.imshow(schechter_normalise.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
                aspect="auto", origin="lower")
     plt.ylabel("log(L_500)")
