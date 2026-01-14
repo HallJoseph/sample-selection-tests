@@ -14,6 +14,7 @@ import astropy.units as u
 from scipy.integrate import dblquad
 from scipy.special import factorial
 from scipy.interpolate import RegularGridInterpolator
+from scipy.stats import chi
 
 from load_catalogue import load_catalogue
 
@@ -440,9 +441,33 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
     # Test goodness of fit (posterior predictive p approach)
     median_res = np.median(flat_samples.T, axis=1)
     sel_func = sigmoid_1D(flux_midpoints, median_res[0], median_res[1])
+    data_chi_sq = np.sum(((erosita_flux_hist[0]-pred_from_emcee)**2) / pred_from_emcee)
+    chi_list = []
 
     for samp_id in sample_df["sample"].drop_duplicates():
-        print(samp_id)
+        samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
+        samp_hist = np.histogram(samp_clusts["log_flux"], bins=erosita_flux_hist[1])
+
+        samp_hist_sel = samp_hist[0] * sel_func
+
+        samp_chi = np.sum(((samp_hist_sel-pred_from_emcee)**2) / pred_from_emcee)
+        if samp_chi > 1e4:
+            samp_clusts.to_csv("chi_too_big.csv")
+            # plt.step(flux_midpoints, samp_hist_sel, where="mid")
+            # plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
+            # plt.plot(flux_midpoints, pred_from_emcee)
+            # plt.step(flux_midpoints, samp_hist[0], where="mid")
+            # plt.xlabel(f"{samp_id}, chi={samp_chi}")
+            # plt.show()
+            continue
+        chi_list.append(samp_chi)
+
+    pct = (sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
+    plt.hist(chi_list, bins=25)
+    plt.vlines(data_chi_sq, 0, 700, color='red', label=f"data chi < {pct:.2f}%")
+    plt.xlabel("$\chi ^2$")
+    plt.legend()
+    plt.show()
 
     return
     
