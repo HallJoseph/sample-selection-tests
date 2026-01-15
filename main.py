@@ -444,13 +444,9 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
     data_chi_sq = np.sum(((erosita_flux_hist[0]-pred_from_emcee)**2) / pred_from_emcee)
     chi_list = []
 
-    for samp_id in sample_df["sample"].drop_duplicates():
-        samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
-        samp_hist = np.histogram(samp_clusts["log_flux"], bins=erosita_flux_hist[1])
-
-        samp_hist_sel = samp_hist[0] * sel_func
-
-        samp_chi = np.sum(((samp_hist_sel-pred_from_emcee)**2) / pred_from_emcee)
+    for par_test in flat_samples:
+        pred_counts = model_counts_1d(10**flux_midpoints, par_test, schechter_pred=sample_flux_hist_scale)
+        samp_chi = np.sum(((erosita_flux_hist[0]-pred_counts)**2) / pred_counts)
         if samp_chi > 1e4:
             samp_clusts.to_csv("chi_too_big.csv")
             # plt.step(flux_midpoints, samp_hist_sel, where="mid")
@@ -463,8 +459,8 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
         chi_list.append(samp_chi)
 
     pct = (sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
-    plt.hist(chi_list, bins=25)
-    plt.vlines(data_chi_sq, 0, 700, color='red', label=f"data chi < {pct:.2f}%")
+    plt.hist(chi_list, bins=25, density=True)
+    plt.vlines(data_chi_sq, 0, 0.25, color='red', label=f"data chi < {pct:.2f}%")
     plt.xlabel("$\chi ^2$")
     plt.legend()
     plt.show()
