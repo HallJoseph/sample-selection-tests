@@ -395,9 +395,9 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
     sample_flux_hist = np.histogram(sample_df["log_flux"], erosita_flux_hist[1])  # , density=True)
     sample_flux_hist_scale = sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0])
     
-    plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
-    plt.step(flux_midpoints, sample_flux_hist_scale, where='mid')
-    plt.show()
+    # plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
+    # plt.step(flux_midpoints, sample_flux_hist_scale, where='mid')
+    # plt.show()
 
     # Now fit a sigmoid to this
     initial_theta = (10, 37)
@@ -424,7 +424,7 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
     #     ax.set_xlim(0, len(samples))
     #     ax.set_ylabel(labels[aid])
     # axes[-1].set_xlabel("step number")
-    plt.show()
+    # plt.show()
     
     pred_from_emcee = model_counts_1d(10**flux_midpoints, 
                                       (np.median(flat_samples.T, axis=1)), 
@@ -443,24 +443,31 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
     sel_func = sigmoid_1D(flux_midpoints, median_res[0], median_res[1])
     data_chi_sq = np.sum(((erosita_flux_hist[0]-pred_from_emcee)**2) / pred_from_emcee)
     chi_list = []
+    theta_tests = flat_samples[np.random.choice(range(len(flat_samples)), 5000, False)]
+    samp_ids = sample_df["sample"].drop_duplicates().values
+    samp_tests = flat_samples[np.random.choice(len(samp_ids), 5000, False)]
 
-    for par_test in flat_samples:
-        pred_counts = model_counts_1d(10**flux_midpoints, par_test, schechter_pred=sample_flux_hist_scale)
-        samp_chi = np.sum(((erosita_flux_hist[0]-pred_counts)**2) / pred_counts)
-        if samp_chi > 1e4:
+    sel_func_tests = sigmoid_1D(np.array([flux_midpoints]*len(theta_tests)), theta_tests[:, 0][:, None], theta_tests[:, 1][:, None])
+    pred_counts_test = sample_flux_hist_scale * sel_func_tests
+    # print(pred_counts.shape)
+
+    for samp_id in tqdm.tqdm(samp_ids):
+        samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
+        samp_hist = np.histogram(samp_clusts["log_flux"], bins=erosita_flux_hist[1])
+
+        samp_hist_sel = samp_hist[0] * sel_func_tests
+
+        samp_chis = np.sum(((samp_hist_sel-pred_counts_test)**2) / pred_counts_test, axis=1)
+        #print((((samp_hist_sel-pred_counts_test)**2) / pred_counts_test).shape)
+        if any(samp_chis > 1e4):
             samp_clusts.to_csv("chi_too_big.csv")
-            # plt.step(flux_midpoints, samp_hist_sel, where="mid")
-            # plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
-            # plt.plot(flux_midpoints, pred_from_emcee)
-            # plt.step(flux_midpoints, samp_hist[0], where="mid")
-            # plt.xlabel(f"{samp_id}, chi={samp_chi}")
-            # plt.show()
             continue
-        chi_list.append(samp_chi)
+        
+        chi_list += list(samp_chis)
 
-    pct = (sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
+    pct = (np.sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
     plt.hist(chi_list, bins=25, density=True)
-    plt.vlines(data_chi_sq, 0, 0.25, color='red', label=f"data chi < {pct:.2f}%")
+    plt.vlines(data_chi_sq, 0, 0.05, color='red', label=f"data chi < {pct:.2f}%")
     plt.xlabel("$\chi ^2$")
     plt.legend()
     plt.show()
