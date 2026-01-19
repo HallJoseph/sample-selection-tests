@@ -43,18 +43,38 @@ def sigmoid_1D(x, A, B):
     return 1 / (1 + np.exp(A*(B-x)))
 
 
+def sigmoid_2d(x, y, A, B, C, D):
+    x_part = sigmoid_1D(x, A, B)
+    y_part = sigmoid_1D(y, C, D)
+
+    #print(x_part.shape)
+    x_arr = np.array([[x] for x in x_part])
+    if len(x_arr.shape) == 3:
+        x_arr = x_arr.transpose(0, 2, 1)
+        #print(x_arr.shape)
+
+        y_arr = np.array([[y] for y in y_part])
+    else:
+        y_arr = np.array([y_part])
+    #print(y_arr.shape)
+    #print((x_arr @ y_arr).shape)
+    return x_arr @ y_arr
+
+
 def sigmoid(x, y, A, B, C, D):
     x_part = sigmoid_1D(x, A, B)
     y_part = sigmoid_1D(y, C, D)
     return x_part * y_part
 
 
-def model_counts(axes, theta: tuple, **kwargs):
+def model_counts(axes, theta: tuple, do_plot=False, **kwargs):
     schechter_pred = kwargs['schechter_pred']
     sigmoid_vals = np.zeros_like(schechter_pred)
-    for zind, z in enumerate(axes[0]):
-        for lind, l in enumerate(axes[1]):
-            sigmoid_vals[zind][lind] = sigmoid(z, np.log10(l), *theta)
+    # for zind, z in enumerate(axes[0]):
+    #     for lind, l in enumerate(axes[1]):
+    #         sigmoid_vals[zind][lind] = sigmoid(z, np.log10(l), *theta)
+
+    sigmoid_vals = sigmoid_2d(axes[0], axes[1], *theta)
     
     # plt.imshow(sigmoid_vals.T, extent=(min(axes[0]), max(axes[0]), np.log10(min(axes[1])), np.log10(max(axes[1]))), aspect="auto", origin="lower")
     # plt.colorbar()
@@ -63,6 +83,9 @@ def model_counts(axes, theta: tuple, **kwargs):
     # plt.imshow(sigmoid_vals.T*schechter_pred.T, extent=(min(axes[0]), max(axes[0]), np.log10(min(axes[1])), np.log10(max(axes[1]))), aspect="auto", origin="lower")
     # plt.colorbar()
     # plt.show()
+    if do_plot:
+        plt.imshow(sigmoid_vals)
+        plt.show()
     return schechter_pred * sigmoid_vals
 
 
@@ -141,61 +164,119 @@ def log_probability(theta, x, data, model_func, prior_func=uniform_1d_prior, **k
     return prob
 
 
-def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins):
+def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df=None):
+    print(histo2d[1])
     # Do some emcee to constrain sigmoid
     initial_theta = (-100, 0.2, 5, 43)
     ndim, nwalkers = 4, 100
     pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
 
+    mid_points[1] = np.log10(mid_points[1])
+
     print(log_probability(initial_theta, mid_points, histo2d[0], model_counts, schechter_pred=schechter_grid, 
                                             data_log_factorials=calculate_log_factorials(histo2d[0])))
 
     sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
-                                    args=(mid_points, histo2d[0], model_counts),
+                                    args=(mid_points, histo2d[0], model_counts, uniform_nonzero_prior),
                                     kwargs={"schechter_pred": schechter_grid, 
                                             "data_log_factorials": calculate_log_factorials(histo2d[0])})
-    sampler.run_mcmc(pos, 5000, progress=True)
+    sampler.run_mcmc(pos, 1000, progress=True)
 
-    # Get the samples and do a corner plot
+    ## Get the samples and do a corner plot
     flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
-    fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
-    plt.show()
-
-    # Plot the chains
-    fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
-    samples = sampler.get_chain()
-    labels = ["A", "B", "C", "D"]
-    for aid, ax in enumerate(axes):
-        ax.plot(samples[:, :, aid], "k", alpha=0.3)
-        ax.set_xlim(0, len(samples))
-        ax.set_ylabel(labels[aid])
-    axes[-1].set_xlabel("step number")
-    plt.show()
+    #fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
+    #plt.show()
+#
+    ## Plot the chains
+    #fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
+    #samples = sampler.get_chain()
+    #labels = ["A", "B", "C", "D"]
+    #for aid, ax in enumerate(axes):
+    #    ax.plot(samples[:, :, aid], "k", alpha=0.3)
+    #    ax.set_xlim(0, len(samples))
+    #    ax.set_ylabel(labels[aid])
+    #axes[-1].set_xlabel("step number")
+    #plt.show()
 
     # Plot median chain values
     #samples_T = samples.T
     pred_from_emcee = model_counts(mid_points, np.median(flat_samples.T, axis=1), schechter_pred=schechter_grid)
 
-    plt.imshow((pred_from_emcee/schechter_grid).T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
-               aspect="auto", origin="lower")
-    plt.ylabel("log(L_500)")
-    plt.xlabel("Redshift")
-    plt.colorbar(label="$\sigma(L, z)$ fraction from sigmoid")
-    plt.show()
+    # plt.imshow((pred_from_emcee/schechter_grid).T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    #            aspect="auto", origin="lower")
+    # plt.ylabel("log(L_500)")
+    # plt.xlabel("Redshift")
+    # plt.colorbar(label="$\sigma(L, z)$ fraction from sigmoid")
+    # plt.show()
+# 
+    # plt.imshow(pred_from_emcee.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    #            aspect="auto", origin="lower")
+    # plt.ylabel("log(L_500)")
+    # plt.xlabel("Redshift")
+    # plt.colorbar(label="N(L, z) from Schechter and Sigmoid")
+    # plt.show()
+# 
+    # plt.imshow(pred_from_emcee.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    #            aspect="auto", origin="lower")
+    # plt.ylabel("log(L_500)")
+    # plt.xlabel("Redshift")
+    # plt.colorbar(label="N clust exp - N clust obs")
+    # plt.show()
 
-    plt.imshow(pred_from_emcee.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
-               aspect="auto", origin="lower")
-    plt.ylabel("log(L_500)")
-    plt.xlabel("Redshift")
-    plt.colorbar(label="N(L, z) from Schechter and Sigmoid")
-    plt.show()
+    # Optionally perform goodness of fit check
+    #plt.imshow(histo2d[0])
+    #plt.show()
+    #plt.imshow(pred_from_emcee)
+    #plt.show()
+    if sample_df is not None:
+        # Test goodness of fit (posterior predictive p approach)
+        median_res = np.median(flat_samples.T, axis=1)
+        sel_func = sigmoid_2d(mid_points[0], mid_points[1], median_res[0], median_res[1], median_res[2], median_res[3])
+        data_chi_sq = np.sum(((histo2d[0]-pred_from_emcee)**2) / pred_from_emcee)
+        
+        chi_list = []
+        theta_tests = flat_samples[np.random.choice(range(len(flat_samples)), 5000, False)]
+        samp_ids = sample_df["sample"].drop_duplicates().values
+        samp_tests = flat_samples[np.random.choice(len(samp_ids), 5000, False)]
+        print(mid_points[1][0])
+        print()
+        print("evaluating tests")
+        sel_func_tests = sigmoid_2d(
+            np.array([mid_points[0]]*len(theta_tests)),
+            np.array([mid_points[1]]*len(theta_tests)),
+            theta_tests[:, 0][:, None], 
+            theta_tests[:, 1][:, None],
+            theta_tests[:, 2][:, None],
+            theta_tests[:, 3][:, None]
+        )
+        print(sel_func_tests[0])
+        print(schechter_grid.shape)
+        pred_counts_test = schechter_grid * sel_func_tests
 
-    plt.imshow(pred_from_emcee.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
-               aspect="auto", origin="lower")
-    plt.ylabel("log(L_500)")
-    plt.xlabel("Redshift")
-    plt.colorbar(label="N clust exp - N clust obs")
-    plt.show()
+        print(pred_counts_test.shape)
+        for samp_id in tqdm.tqdm(samp_ids):
+            samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
+            samp_hist = np.histogram2d(samp_clusts['z'], samp_clusts["log_l"], bins=[histo2d[1], histo2d[2]])
+
+            samp_hist_sel = samp_hist[0] * sel_func_tests
+
+            samp_chis = np.sum(((samp_hist_sel-pred_counts_test)**2) / pred_counts_test, axis=(1,2))
+
+            #print((((samp_hist_sel-pred_counts_test)**2) / pred_counts_test).shape)
+            if any(samp_chis > 1e4):
+                samp_clusts.to_csv("chi_too_big.csv")
+                continue
+            
+            chi_list += list(samp_chis)
+
+        pct = (np.sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
+        print(pct)
+        plt.hist(chi_list, bins=25, density=True)
+        plt.vlines(data_chi_sq, 0, 0.05, color='red', label=f"data chi < {pct:.2f}%")
+        plt.xlabel("$\chi ^2$")
+        plt.legend()
+        plt.show()
+
     return
 
 
@@ -333,6 +414,91 @@ def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, 
     return samples_df
 
 
+def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoints):
+    # Bin sampled fluxes to same histogram (roughly) as erosita, working with density for now
+    sample_flux_hist = np.histogram(sample_df["log_flux"], erosita_flux_hist[1])  # , density=True)
+    sample_flux_hist_scale = sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0])
+    
+    # plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
+    # plt.step(flux_midpoints, sample_flux_hist_scale, where='mid')
+    # plt.show()
+
+    # Now fit a sigmoid to this
+    initial_theta = (10, 37)
+    ndim, nwalkers = 2, 100
+    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
+                                    args=(10**flux_midpoints, erosita_flux_hist[0], model_counts_1d),
+                                    kwargs={"schechter_pred": sample_flux_hist_scale, 
+                                            "data_log_factorials": calculate_log_factorials(erosita_flux_hist[0])})
+    sampler.run_mcmc(pos, 5000, progress=True)
+
+    # Get the samples and do a corner plot
+    flat_samples = sampler.get_chain(discard=1000, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
+    fig = corner.corner(flat_samples, labels=["A", "B"], show_titles=True)
+    plt.show()
+
+    # Plot the chains
+    # fig, axes = plt.subplots(2, figsize=(10, 7), sharex=True)
+    # samples = sampler.get_chain()
+    # labels = ["A", "B"]
+    # for aid, ax in enumerate(axes):
+    #     ax.plot(samples[:, :, aid], "k", alpha=0.3)
+    #     ax.set_xlim(0, len(samples))
+    #     ax.set_ylabel(labels[aid])
+    # axes[-1].set_xlabel("step number")
+    # plt.show()
+    
+    pred_from_emcee = model_counts_1d(10**flux_midpoints, 
+                                      (np.median(flat_samples.T, axis=1)), 
+                                      schechter_pred=sample_flux_hist_scale)
+    #plt.scatter(flux_midpoints, sample_flux_hist_scale, label="Schechter Function")
+    #plt.scatter(flux_midpoints, erosita_flux_hist[0], label="Observed")
+    #plt.scatter(flux_midpoints, pred_from_emcee)
+    ## plt.yscale("log")
+    #plt.xlabel("log(flux (erg/s/Mpc^2))")
+    #plt.ylabel("count")
+    #plt.legend()
+    #plt.show()
+
+    # Test goodness of fit (posterior predictive p approach)
+    median_res = np.median(flat_samples.T, axis=1)
+    sel_func = sigmoid_1D(flux_midpoints, median_res[0], median_res[1])
+    data_chi_sq = np.sum(((erosita_flux_hist[0]-pred_from_emcee)**2) / pred_from_emcee)
+    chi_list = []
+    theta_tests = flat_samples[np.random.choice(range(len(flat_samples)), 5000, False)]
+    samp_ids = sample_df["sample"].drop_duplicates().values
+    samp_tests = flat_samples[np.random.choice(len(samp_ids), 5000, False)]
+
+    sel_func_tests = sigmoid_1D(np.array([flux_midpoints]*len(theta_tests)), theta_tests[:, 0][:, None], theta_tests[:, 1][:, None])
+    
+    # What is this line???
+    pred_counts_test = sample_flux_hist_scale * sel_func_tests
+    # print(pred_counts.shape)
+
+    for samp_id in tqdm.tqdm(samp_ids):
+        samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
+        samp_hist = np.histogram(samp_clusts["log_flux"], bins=erosita_flux_hist[1])
+
+        samp_hist_sel = samp_hist[0] * sel_func_tests
+
+        samp_chis = np.sum(((samp_hist_sel-pred_counts_test)**2) / pred_counts_test, axis=1)
+        #print((((samp_hist_sel-pred_counts_test)**2) / pred_counts_test).shape)
+        if any(samp_chis > 1e4):
+            samp_clusts.to_csv("chi_too_big.csv")
+            continue
+        
+        chi_list += list(samp_chis)
+
+    pct = (np.sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
+    plt.hist(chi_list, bins=25, density=True)
+    plt.vlines(data_chi_sq, 0, 0.05, color='red', label=f"data chi < {pct:.2f}%")
+    plt.xlabel("$\chi ^2$")
+    plt.legend()
+    plt.show()
+
+
 def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv"):
     np.random.seed(42)
     # Load in the sample catalogue and set up histogram grid
@@ -391,88 +557,10 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
                                     schechter_sum=schechter_sum, n_samp=5000)
         sample_df.to_csv(schechter_clust_path)
     
-    # Bin sampled fluxes to same histogram (roughly) as erosita, working with density for now
-    sample_flux_hist = np.histogram(sample_df["log_flux"], erosita_flux_hist[1])  # , density=True)
-    sample_flux_hist_scale = sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0])
-    
-    # plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
-    # plt.step(flux_midpoints, sample_flux_hist_scale, where='mid')
-    # plt.show()
 
-    # Now fit a sigmoid to this
-    initial_theta = (10, 37)
-    ndim, nwalkers = 2, 100
-    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
-
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
-                                    args=(10**flux_midpoints, erosita_flux_hist[0], model_counts_1d),
-                                    kwargs={"schechter_pred": sample_flux_hist_scale, 
-                                            "data_log_factorials": calculate_log_factorials(erosita_flux_hist[0])})
-    sampler.run_mcmc(pos, 5000, progress=True)
-
-    # Get the samples and do a corner plot
-    flat_samples = sampler.get_chain(discard=1000, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
-    # fig = corner.corner(flat_samples, labels=["A", "B"], show_titles=True)
-    # plt.show()
-
-    # Plot the chains
-    # fig, axes = plt.subplots(2, figsize=(10, 7), sharex=True)
-    # samples = sampler.get_chain()
-    # labels = ["A", "B"]
-    # for aid, ax in enumerate(axes):
-    #     ax.plot(samples[:, :, aid], "k", alpha=0.3)
-    #     ax.set_xlim(0, len(samples))
-    #     ax.set_ylabel(labels[aid])
-    # axes[-1].set_xlabel("step number")
-    # plt.show()
-    
-    pred_from_emcee = model_counts_1d(10**flux_midpoints, 
-                                      (np.median(flat_samples.T, axis=1)), 
-                                      schechter_pred=sample_flux_hist_scale)
-    #plt.scatter(flux_midpoints, sample_flux_hist_scale, label="Schechter Function")
-    #plt.scatter(flux_midpoints, erosita_flux_hist[0], label="Observed")
-    #plt.scatter(flux_midpoints, pred_from_emcee)
-    ## plt.yscale("log")
-    #plt.xlabel("log(flux (erg/s/Mpc^2))")
-    #plt.ylabel("count")
-    #plt.legend()
-    #plt.show()
-
-    # Test goodness of fit (posterior predictive p approach)
-    median_res = np.median(flat_samples.T, axis=1)
-    sel_func = sigmoid_1D(flux_midpoints, median_res[0], median_res[1])
-    data_chi_sq = np.sum(((erosita_flux_hist[0]-pred_from_emcee)**2) / pred_from_emcee)
-    chi_list = []
-    theta_tests = flat_samples[np.random.choice(range(len(flat_samples)), 5000, False)]
-    samp_ids = sample_df["sample"].drop_duplicates().values
-    samp_tests = flat_samples[np.random.choice(len(samp_ids), 5000, False)]
-
-    sel_func_tests = sigmoid_1D(np.array([flux_midpoints]*len(theta_tests)), theta_tests[:, 0][:, None], theta_tests[:, 1][:, None])
-    pred_counts_test = sample_flux_hist_scale * sel_func_tests
-    # print(pred_counts.shape)
-
-    for samp_id in tqdm.tqdm(samp_ids):
-        samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
-        samp_hist = np.histogram(samp_clusts["log_flux"], bins=erosita_flux_hist[1])
-
-        samp_hist_sel = samp_hist[0] * sel_func_tests
-
-        samp_chis = np.sum(((samp_hist_sel-pred_counts_test)**2) / pred_counts_test, axis=1)
-        #print((((samp_hist_sel-pred_counts_test)**2) / pred_counts_test).shape)
-        if any(samp_chis > 1e4):
-            samp_clusts.to_csv("chi_too_big.csv")
-            continue
-        
-        chi_list += list(samp_chis)
-
-    pct = (np.sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
-    plt.hist(chi_list, bins=25, density=True)
-    plt.vlines(data_chi_sq, 0, 0.05, color='red', label=f"data chi < {pct:.2f}%")
-    plt.xlabel("$\chi ^2$")
-    plt.legend()
-    plt.show()
-
+    fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df)
     return
+    flux_curve_sampled(sample_df)
     
     plt.imshow(schechter_normalise.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
                aspect="auto", origin="lower")
