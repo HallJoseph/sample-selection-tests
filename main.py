@@ -280,6 +280,149 @@ def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df=Non
     return
 
 
+def fit2d_alt_ppc(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df=None):
+    print(histo2d[1], "OI")
+    # Do some emcee to constrain sigmoid
+    initial_theta = (-100, 0.2, 5, 43)
+    ndim, nwalkers = 4, 100
+    pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
+
+    mid_points[1] = np.log10(mid_points[1])
+
+    print(log_probability(initial_theta, mid_points, histo2d[0], model_counts, schechter_pred=schechter_grid, 
+                                            data_log_factorials=calculate_log_factorials(histo2d[0])))
+
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
+                                    args=(mid_points, histo2d[0], model_counts, uniform_nonzero_prior),
+                                    kwargs={"schechter_pred": schechter_grid, 
+                                            "data_log_factorials": calculate_log_factorials(histo2d[0])})
+    sampler.run_mcmc(pos, 1000, progress=True)
+
+    ## Get the samples and do a corner plot
+    flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
+    #fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
+    #plt.show()
+#
+    ## Plot the chains
+    #fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
+    #samples = sampler.get_chain()
+    #labels = ["A", "B", "C", "D"]
+    #for aid, ax in enumerate(axes):
+    #    ax.plot(samples[:, :, aid], "k", alpha=0.3)
+    #    ax.set_xlim(0, len(samples))
+    #    ax.set_ylabel(labels[aid])
+    #axes[-1].set_xlabel("step number")
+    #plt.show()
+
+    # Plot median chain values
+    #samples_T = samples.T
+    pred_from_emcee = model_counts(mid_points, np.median(flat_samples.T, axis=1), schechter_pred=schechter_grid)
+
+    # plt.imshow((pred_from_emcee/schechter_grid).T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    #            aspect="auto", origin="lower")
+    # plt.ylabel("log(L_500)")
+    # plt.xlabel("Redshift")
+    # plt.colorbar(label="$\sigma(L, z)$ fraction from sigmoid")
+    # plt.show()
+# 
+    # plt.imshow(pred_from_emcee.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    #            aspect="auto", origin="lower")
+    # plt.ylabel("log(L_500)")
+    # plt.xlabel("Redshift")
+    # plt.colorbar(label="N(L, z) from Schechter and Sigmoid")
+    # plt.show()
+# 
+    # plt.imshow(pred_from_emcee.T - histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+    #            aspect="auto", origin="lower")
+    # plt.ylabel("log(L_500)")
+    # plt.xlabel("Redshift")
+    # plt.colorbar(label="N clust exp - N clust obs")
+    # plt.show()
+
+    # Optionally perform goodness of fit check
+    #plt.imshow(histo2d[0])
+    #plt.show()
+    #plt.imshow(pred_from_emcee)
+    #plt.show()
+    if sample_df is not None:
+        # Test goodness of fit (posterior predictive p approach)
+        median_res = np.median(flat_samples.T, axis=1)
+        sel_func = sigmoid_2d(mid_points[0], mid_points[1], median_res[0], median_res[1], median_res[2], median_res[3])
+        data_chi_sq = np.sum(((histo2d[0]-pred_from_emcee)**2) / pred_from_emcee)
+        
+        chi_list = []
+        theta_tests = flat_samples[np.random.choice(range(len(flat_samples)), 5000, False)]
+        samp_ids = sample_df["sample"].drop_duplicates().values
+        samp_tests = flat_samples[np.random.choice(len(samp_ids), 5000, False)]
+        print(mid_points[1][0])
+        print()
+        print("evaluating tests")
+        sel_func_tests = sigmoid_2d(
+            np.array([mid_points[0]]*len(theta_tests)),
+            np.array([mid_points[1]]*len(theta_tests)),
+            theta_tests[:, 0][:, None], 
+            theta_tests[:, 1][:, None],
+            theta_tests[:, 2][:, None],
+            theta_tests[:, 3][:, None]
+        )
+        print(sel_func_tests[0])
+        print(schechter_grid.shape)
+        pred_counts_test = schechter_grid * sel_func_tests
+
+        print(pred_counts_test.shape)
+
+        y_reps = np.random.poisson(pred_counts_test)
+        
+        # test stat for y rep (sum of clusters found)
+        test_y_rep = np.sum(y_reps, axis=(1,2))
+        # test stat for y
+        test_y = np.sum(histo2d[0])
+        p_val = 100 * sum(test_y_rep > test_y) / len(test_y_rep)
+        #plt.hist(test_y_rep, 25, label=r"$y^\text{rep}$")
+        #plt.vlines(test_y, 0, 600, color="red", label=f"Observed\np = {p_val:.2f}")
+        #plt.legend()
+        #plt.xlabel("Number of Clusters")
+        #plt.show()
+
+        # Test stat with chi square instead
+        chi_y_rep = np.sum(((y_reps-pred_counts_test)**2) / pred_counts_test, axis=(1,2))
+        chi_y_obs_theta = np.sum(((histo2d[0]-pred_counts_test)**2) / pred_counts_test, axis=(1,2))
+        chi_p_val = 100 * sum(chi_y_rep > chi_y_obs_theta) / len(chi_y_rep)
+        plt.scatter(chi_y_obs_theta, chi_y_rep, s=1)
+        plt.plot(np.linspace(min(chi_y_rep), max(chi_y_rep), 2), np.linspace(min(chi_y_rep), max(chi_y_rep), 2), color="red")
+        plt.gca().set_aspect(1)
+        plt.title(f"p={chi_p_val}")
+        plt.xlabel(r"$\chi^2(y, \theta)")
+        plt.ylabel(r"$\chi^2(y^\text{rep}, \theta)")
+        plt.show()
+
+        return
+        for samp_id in tqdm.tqdm(samp_ids):
+            samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
+            samp_hist = np.histogram2d(samp_clusts['z'], samp_clusts["log_l"], bins=[histo2d[1], histo2d[2]])
+
+            samp_hist_sel = samp_hist[0] * sel_func_tests
+
+            samp_chis = np.sum(((samp_hist_sel-pred_counts_test)**2) / pred_counts_test, axis=(1,2))
+
+            #print((((samp_hist_sel-pred_counts_test)**2) / pred_counts_test).shape)
+            if any(samp_chis > 1e4):
+                samp_clusts.to_csv("chi_too_big.csv")
+                continue
+            
+            chi_list += list(samp_chis)
+
+        pct = (np.sum(np.array(chi_list) > data_chi_sq) / len(chi_list)) * 100
+        print(pct)
+        plt.hist(chi_list, bins=25, density=True)
+        plt.vlines(data_chi_sq, 0, 0.05, color='red', label=f"data chi < {pct:.2f}%")
+        plt.xlabel("$\chi ^2$")
+        plt.legend()
+        plt.show()
+
+    return
+
+
 def calc_fluxes(lz_grid, axes):
     # Returns fluxes of an lz grid in units of erg / s / Mpc^2
     flux_ax, counts = [], []
