@@ -1,6 +1,7 @@
 # Code for trying to produce an appropriate model for the eRASS selection function
 # Created: 2026-01-06, by: Joseph Hall
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import emcee
@@ -13,11 +14,21 @@ from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
 from scipy.integrate import dblquad
 from scipy.special import factorial
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator, interp1d
 from scipy.stats import chi
 
 from load_catalogue import load_catalogue
 
+new_rc_params = {
+    'text.usetex': False,
+    "svg.fonttype": 'none',
+    "font.family": 'helvetica',
+    "font.size": 16,
+    "mathtext.fontset": 'custom',
+    "mathtext.rm": "helvetica",
+    "mathtext.it": "helvetica"
+}
+mpl.rcParams.update(new_rc_params)
 
 H0 = 70
 COSMO = FlatLambdaCDM(H0, 0.3)
@@ -184,8 +195,8 @@ def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df=Non
 
     ## Get the samples and do a corner plot
     flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
-    #fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=True)
-    #plt.show()
+    # fig = corner.corner(flat_samples, labels=["A", "B", "C", "D"], show_titles=False)
+    # plt.show()
 #
     ## Plot the chains
     #fig, axes = plt.subplots(4, figsize=(10, 7), sharex=True)
@@ -202,12 +213,13 @@ def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df=Non
     #samples_T = samples.T
     pred_from_emcee = model_counts(mid_points, np.median(flat_samples.T, axis=1), schechter_pred=schechter_grid)
 
-    # plt.imshow((pred_from_emcee/schechter_grid).T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
-    #            aspect="auto", origin="lower")
-    # plt.ylabel("log(L_500)")
-    # plt.xlabel("Redshift")
-    # plt.colorbar(label="$\sigma(L, z)$ fraction from sigmoid")
-    # plt.show()
+    plt.imshow((pred_from_emcee/schechter_grid).T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("$\log(L_{500})$")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="$\sigma(L, z)$")
+    plt.tight_layout()
+    plt.show()
 # 
     # plt.imshow(pred_from_emcee.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
     #            aspect="auto", origin="lower")
@@ -371,6 +383,7 @@ def fit2d_alt_ppc(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sampl
 
         print(pred_counts_test.shape)
 
+        # Generate y_reps based on a poisson distribution with means from pred_counts_test
         y_reps = np.random.poisson(pred_counts_test)
         
         # test stat for y rep (sum of clusters found)
@@ -388,6 +401,7 @@ def fit2d_alt_ppc(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sampl
         chi_y_rep = np.sum(((y_reps-pred_counts_test)**2) / pred_counts_test, axis=(1,2))
         chi_y_obs_theta = np.sum(((histo2d[0]-pred_counts_test)**2) / pred_counts_test, axis=(1,2))
         chi_p_val = 100 * sum(chi_y_rep > chi_y_obs_theta) / len(chi_y_rep)
+
         plt.scatter(chi_y_obs_theta, chi_y_rep, s=1)
         plt.plot(np.linspace(min(chi_y_rep), max(chi_y_rep), 2), np.linspace(min(chi_y_rep), max(chi_y_rep), 2), color="red")
         plt.gca().set_aspect(1)
@@ -438,7 +452,7 @@ def calc_fluxes(lz_grid, axes):
 
 def model_counts_1d(flux_ax, theta, **kwargs):
     schechter_pred = kwargs['schechter_pred']
-    sigmoid_vals = sigmoid_1D(np.log10(flux_ax), *theta)
+    sigmoid_vals = sigmoid_1D(flux_ax, *theta)
     #plt.scatter(np.log10(flux_ax), sigmoid_vals)
     #plt.show()
     return schechter_pred * sigmoid_vals
@@ -462,7 +476,7 @@ def fit_1d_grid(schechter_grid, histo2d, mid_points):
 
     # Get the samples and do a corner plot
     flat_samples = sampler.get_chain(discard=1000, thin=15, flat=True)[:] # Using 100 steps as burn in and thinning by 15
-    fig = corner.corner(flat_samples, labels=["A", "B"], show_titles=True)
+    fig = corner.corner(flat_samples, labels=["A", "B"], show_titles=False)
     plt.show()
 
     # Plot the chains
@@ -562,9 +576,12 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
     sample_flux_hist = np.histogram(sample_df["log_flux"], erosita_flux_hist[1])  # , density=True)
     sample_flux_hist_scale = sample_flux_hist[0] * schechter_sum / np.sum(sample_flux_hist[0])
     
-    # plt.step(flux_midpoints, erosita_flux_hist[0], where='mid')
-    # plt.step(flux_midpoints, sample_flux_hist_scale, where='mid')
-    # plt.show()
+    plt.step(flux_midpoints, erosita_flux_hist[0], where='mid', label="Observed")
+    plt.step(flux_midpoints, sample_flux_hist_scale, where='mid', label="Schechter")
+    plt.legend()
+    plt.xlabel("$\log(f_{500})")
+    plt.ylabel("Frequency")
+    plt.clf()
 
     # Now fit a sigmoid to this
     initial_theta = (10, 37)
@@ -572,7 +589,7 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
     pos = np.array(initial_theta) + 1e-4 * np.random.randn(nwalkers, ndim)
 
     sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, 
-                                    args=(10**flux_midpoints, erosita_flux_hist[0], model_counts_1d),
+                                    args=(flux_midpoints, erosita_flux_hist[0], model_counts_1d),
                                     kwargs={"schechter_pred": sample_flux_hist_scale, 
                                             "data_log_factorials": calculate_log_factorials(erosita_flux_hist[0])})
     sampler.run_mcmc(pos, 5000, progress=True)
@@ -593,17 +610,21 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
     # axes[-1].set_xlabel("step number")
     # plt.show()
     
-    pred_from_emcee = model_counts_1d(10**flux_midpoints, 
+    pred_from_emcee = model_counts_1d(flux_midpoints, 
                                       (np.median(flat_samples.T, axis=1)), 
                                       schechter_pred=sample_flux_hist_scale)
-    #plt.scatter(flux_midpoints, sample_flux_hist_scale, label="Schechter Function")
-    #plt.scatter(flux_midpoints, erosita_flux_hist[0], label="Observed")
-    #plt.scatter(flux_midpoints, pred_from_emcee)
+    # schecter_interp = Inter
+    plt.figure(figsize=(7,6))
+    plt.scatter(flux_midpoints, erosita_flux_hist[0], label="Observed", zorder=1)
+    plt.step(flux_midpoints, sample_flux_hist_scale, where='mid', zorder=1)
+    plt.step(flux_midpoints, sample_flux_hist_scale, label="Schechter", where='mid', zorder=1)
+    #plt.step(flux_midpoints, pred_from_emcee, label=r"Schecter $ \times \text{ }\sigma(f)$", where='mid', zorder=1)#, c='lightgreen')
     ## plt.yscale("log")
-    #plt.xlabel("log(flux (erg/s/Mpc^2))")
-    #plt.ylabel("count")
-    #plt.legend()
-    #plt.show()
+    plt.xlabel(r"$\log(f_{500} \text{ (erg/s/Mpc}^2))$")
+    plt.ylabel("Count")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
     # Test goodness of fit (posterior predictive p approach)
     median_res = np.median(flat_samples.T, axis=1)
@@ -616,9 +637,38 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
 
     sel_func_tests = sigmoid_1D(np.array([flux_midpoints]*len(theta_tests)), theta_tests[:, 0][:, None], theta_tests[:, 1][:, None])
     
-    # What is this line???
+    # What is this line: this is getting the "model" for each of the 500 draws of theta
     pred_counts_test = sample_flux_hist_scale * sel_func_tests
-    # print(pred_counts.shape)
+    print(pred_counts_test.shape)
+
+    # Generate y_reps based on a poisson distribution with means from pred_counts_test
+    y_reps = np.random.poisson(pred_counts_test)
+    
+    # test stat for y rep (sum of clusters found)
+    test_y_rep = np.sum(y_reps, axis=(1))
+    # test stat for y
+    test_y = np.sum(erosita_flux_hist[0])
+    p_val = 100 * sum(test_y_rep > test_y) / len(test_y_rep)
+    plt.hist(test_y_rep, 25, label=r"$y^\text{rep}$")
+    plt.vlines(test_y, 0, 600, color="red", label=f"Observed\np = {p_val:.2f}")
+    plt.legend()
+    plt.xlabel("Number of Clusters")
+    plt.show()
+
+    # Test stat with chi square instead
+    chi_y_rep = np.sum(((y_reps-pred_counts_test)**2) / pred_counts_test, axis=(1))
+    chi_y_obs_theta = np.sum(((erosita_flux_hist[0]-pred_counts_test)**2) / pred_counts_test, axis=(1))
+    chi_p_val = 100 * sum(chi_y_rep > chi_y_obs_theta) / len(chi_y_rep)
+
+    plt.scatter(chi_y_obs_theta, chi_y_rep, s=1)
+    plt.plot(np.linspace(min(chi_y_rep), max(chi_y_rep), 2), np.linspace(min(chi_y_rep), max(chi_y_rep), 2), color="red")
+    plt.gca().set_aspect(1)
+    plt.title(f"p={chi_p_val}")
+    plt.xlabel(r"$\chi^2(y, \theta)")
+    plt.ylabel(r"$\chi^2(y^\text{rep}, \theta)")
+    plt.show()
+    
+    return
 
     for samp_id in tqdm.tqdm(samp_ids):
         samp_clusts = sample_df[sample_df["sample"]==samp_id].copy()
@@ -650,8 +700,18 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
     # Constrain z range of emain to remove "fuzz"
     emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
     histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
+
     z_bins = histo2d[1]
     lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
+    plt.imshow(histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+               aspect="auto", origin="lower")
+    plt.ylabel("log(L_500)")
+    plt.xlabel("Redshift")
+    plt.ylabel("$\log(L_{500})$")
+    plt.xlabel("Redshift")
+    plt.colorbar(label="N(L, z)")
+    plt.clf()
+    #return
 
     # Calculate flux of emain clusters
     emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
@@ -701,8 +761,9 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
         sample_df.to_csv(schechter_clust_path)
     
 
-    fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df)
+    flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoints)
     return
+    fit2d_alt_ppc(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df)
     flux_curve_sampled(sample_df)
     
     plt.imshow(schechter_normalise.T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
