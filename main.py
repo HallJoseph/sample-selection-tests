@@ -12,6 +12,7 @@ import pandas as pd
 
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
+from astropy.io import fits
 from scipy.integrate import dblquad
 from scipy.special import factorial
 from scipy.interpolate import RegularGridInterpolator, interp1d
@@ -22,11 +23,11 @@ from load_catalogue import load_catalogue
 new_rc_params = {
     'text.usetex': False,
     "svg.fonttype": 'none',
-    "font.family": 'helvetica',
+    "font.family": 'Nimbus Roman No9 L',
     "font.size": 16,
     "mathtext.fontset": 'custom',
-    "mathtext.rm": "helvetica",
-    "mathtext.it": "helvetica"
+    "mathtext.rm": "Nimbus Roman No9 L",
+    "mathtext.it": "Nimbus Roman No9 L:italic"
 }
 mpl.rcParams.update(new_rc_params)
 
@@ -285,7 +286,7 @@ def fit2d(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sample_df=Non
         print(pct)
         plt.hist(chi_list, bins=25, density=True)
         plt.vlines(data_chi_sq, 0, 0.05, color='red', label=f"data chi < {pct:.2f}%")
-        plt.xlabel("$\chi ^2$")
+        plt.xlabel(r"$\chi ^2$")
         plt.legend()
         plt.show()
 
@@ -406,8 +407,8 @@ def fit2d_alt_ppc(mid_points, histo2d, schechter_grid, z_bins, lumin_bins, sampl
         plt.plot(np.linspace(min(chi_y_rep), max(chi_y_rep), 2), np.linspace(min(chi_y_rep), max(chi_y_rep), 2), color="red")
         plt.gca().set_aspect(1)
         plt.title(f"p={chi_p_val}")
-        plt.xlabel(r"$\chi^2(y, \theta)")
-        plt.ylabel(r"$\chi^2(y^\text{rep}, \theta)")
+        plt.xlabel(r"$\chi^2(y, \theta)$")
+        plt.ylabel(r"$\chi^2(y^\text{rep}, \theta)$")
         plt.show()
 
         return
@@ -664,8 +665,8 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
     plt.plot(np.linspace(min(chi_y_rep), max(chi_y_rep), 2), np.linspace(min(chi_y_rep), max(chi_y_rep), 2), color="red")
     plt.gca().set_aspect(1)
     plt.title(f"p={chi_p_val}")
-    plt.xlabel(r"$\chi^2(y, \theta)")
-    plt.ylabel(r"$\chi^2(y^\text{rep}, \theta)")
+    plt.xlabel(r"$\chi^2(y, \theta)$")
+    plt.ylabel(r"$\chi^2(y^\text{rep}, \theta)$")
     plt.show()
     
     return
@@ -692,29 +693,34 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
     plt.show()
 
 
-def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv"):
+def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv", full=False):
     np.random.seed(42)
-    # Load in the sample catalogue and set up histogram grid
-    emain, wh = load_catalogue(sample_path)
+    if full:
+        
+        pass
+    else:
+        # Load in the sample catalogue and set up histogram grid
+        emain, wh = load_catalogue(sample_path)
 
-    # Constrain z range of emain to remove "fuzz"
-    emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
-    histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
+        # Constrain z range of emain to remove "fuzz"
+        emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
+        histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
 
-    z_bins = histo2d[1]
-    lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
-    plt.imshow(histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
-               aspect="auto", origin="lower")
-    plt.ylabel("log(L_500)")
-    plt.xlabel("Redshift")
-    plt.ylabel("$\log(L_{500})$")
-    plt.xlabel("Redshift")
-    plt.colorbar(label="N(L, z)")
-    plt.clf()
-    #return
+        z_bins = histo2d[1]
+        lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
+        plt.imshow(histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
+                aspect="auto", origin="lower")
+        plt.ylabel("log(L_500)")
+        plt.xlabel("Redshift")
+        plt.ylabel("$\log(L_{500})$")
+        plt.xlabel("Redshift")
+        plt.colorbar(label="N(L, z)")
+        plt.clf()
+        #return
 
-    # Calculate flux of emain clusters
-    emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
+        # Calculate flux of emain clusters
+        emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
+
     erosita_flux_hist = np.histogram(emain["log_flux"], bins=75) #)len(emain["log_flux"]))  #, density=True)
     flux_midpoints = (erosita_flux_hist[1][1:]+erosita_flux_hist[1][:-1])/2
 
