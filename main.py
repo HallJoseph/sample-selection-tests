@@ -699,7 +699,7 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
 
 
 def main(
-        sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv", full=False,
+        sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="data/schechter_clusts.csv", full=False,
         plot_samp_hist=False    
     ):
     np.random.seed(42)
@@ -825,6 +825,6 @@ def main(
 if __name__ == "__main__":
     main(
         sample_path="/Users/ko23871/Documents/sample_selection/data/erass1cl_primary_v3.2.fits", 
-        schechter_clust_path="schechter_clusts_full.csv", 
+        schechter_clust_path="data/schechter_clusts_full.csv", 
         full=True
     )
