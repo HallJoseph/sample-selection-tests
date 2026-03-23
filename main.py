@@ -13,6 +13,7 @@ import pandas as pd
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
 from astropy.io import fits
+from astropy.table import Table
 from scipy.integrate import dblquad
 from scipy.special import factorial
 from scipy.interpolate import RegularGridInterpolator, interp1d
@@ -537,13 +538,17 @@ def sample_schechter(schechter_prob_interp, z_min=0.1, z_max=0.2, log_l_min=42, 
     l_arr = np.linspace(log_l_min, log_l_max, 2000)
     z_grid, l_grid = np.meshgrid(z_arr, l_arr, indexing="ij")
     prob_dist = schechter_prob_interp((z_grid, l_grid))
+    prob_dist[prob_dist < 0] = 0
+    plt.imshow(prob_dist)
+    plt.show()
     prob_dist /= np.sum(prob_dist)
     z_probs = np.sum(prob_dist, axis=1)
+    print(z_probs)
     
     # Sample schechter
     for x in tqdm.tqdm(range(n_samp), desc="Sampling Schechter"):
         # redshift samples
-        z_choices = np.random.choice(len(z_arr), 548, p=z_probs)
+        z_choices = np.random.choice(len(z_arr), int(schechter_sum), p=z_probs)
         z_selects = z_arr[z_choices]
 
         # Sample luminosities
@@ -693,11 +698,29 @@ def flux_curve_sampled(sample_df, erosita_flux_hist, schechter_sum, flux_midpoin
     plt.show()
 
 
-def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv", full=False):
+def main(
+        sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_path="schechter_clusts.csv", full=False,
+        plot_samp_hist=False    
+    ):
     np.random.seed(42)
     if full:
-        
-        pass
+        with fits.open(sample_path) as hdul:
+            emain = Table(hdul[1].data)
+        print(emain.columns)
+        emain = emain[[
+            'RA','DEC','EXT_LIKE','DET_LIKE_0','EXP','BEST_Z','BEST_ZERR','BEST_Z_TYPE','PCONT',
+            'CR500','CR500_L','CR500_H','F500','F500_L','F500_H','L500','L500_L','L500_H'
+        ]].to_pandas()
+
+        emain = emain[emain["L500"] >= 0]
+        print(min(emain["BEST_Z"]+42))
+
+        histo2d = np.histogram2d(emain["BEST_Z"], np.log10(emain["L500"])+42, bins=25)
+
+        # Calculate flux of emain clusters
+        emain["log_flux"] = np.log10(emain["L500"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z"])**2).value))
+        sample_area = 2*np.pi
+
     else:
         # Load in the sample catalogue and set up histogram grid
         emain, wh = load_catalogue(sample_path)
@@ -705,26 +728,30 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
         # Constrain z range of emain to remove "fuzz"
         emain = emain[(emain["BEST_Z_1"] <= 0.2) & (emain["BEST_Z_1"] >= 0.1)]
         histo2d = np.histogram2d(emain["BEST_Z_1"], np.log10(emain["L500_1"])+42)
+        #return
 
-        z_bins = histo2d[1]
-        lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
+        # Calculate flux of emain clusters
+        emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
+        
+        sample_area = 1.1085567827
+    
+    z_bins = histo2d[1]
+    lumin_bins = 10 ** histo2d[2] # * u.erg/u.second
+    
+    if plot_samp_hist:
         plt.imshow(histo2d[0].T, extent=[z_bins[0], z_bins[-1], np.log10(lumin_bins[0]), np.log10(lumin_bins[-1])], 
                 aspect="auto", origin="lower")
         plt.ylabel("log(L_500)")
         plt.xlabel("Redshift")
         plt.ylabel("$\log(L_{500})$")
         plt.xlabel("Redshift")
-        plt.colorbar(label="N(L, z)")
-        plt.clf()
-        #return
-
-        # Calculate flux of emain clusters
-        emain["log_flux"] = np.log10(emain["L500_1"])+42 - np.log10((4*np.pi*(COSMO.luminosity_distance(emain["BEST_Z_1"])**2).value))
+        plt.colorbar(label="$N(L, z)$")
+        plt.show()
 
     erosita_flux_hist = np.histogram(emain["log_flux"], bins=75) #)len(emain["log_flux"]))  #, density=True)
     flux_midpoints = (erosita_flux_hist[1][1:]+erosita_flux_hist[1][:-1])/2
 
-    schechter_grid = evalaute_schechter_lz(histo2d[0], z_bins, lumin_bins)
+    schechter_grid = evalaute_schechter_lz(histo2d[0], z_bins, lumin_bins, sample_area=sample_area)
     schechter_sum = np.sum(schechter_grid)
 
     # Get midpoints
@@ -742,10 +769,11 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
 
     except Exception as exc:
         # Fit by sampling the schechter function
-        schechter_grid_fine = np.zeros((50, 50))
-        fine_z_bins = np.linspace(min(z_bins), max(z_bins), 51)
-        fine_l_bins = 10 ** np.linspace(min(np.log10(lumin_bins)), max(np.log10(lumin_bins)), 51)
-        schechter_grid_fine = evalaute_schechter_lz(schechter_grid_fine, fine_z_bins, fine_l_bins)
+        grid_size=75
+        schechter_grid_fine = np.zeros((grid_size, grid_size))
+        fine_z_bins = np.linspace(min(z_bins), max(z_bins), grid_size+1)
+        fine_l_bins = 10 ** np.linspace(min(np.log10(lumin_bins)), max(np.log10(lumin_bins)), grid_size+1)
+        schechter_grid_fine = evalaute_schechter_lz(schechter_grid_fine, fine_z_bins, fine_l_bins, sample_area=sample_area)
         fine_mid_points = [(fine_z_bins[1:] + fine_z_bins[:-1])/2, np.log10((fine_l_bins[1:] + fine_l_bins[:-1])/2)]
 
         # Normalise schechter function so it sums to 1 (for making a pdf)
@@ -795,4 +823,8 @@ def main(sample_path="data/emain_wen-han_final_20250328_1052", schechter_clust_p
 
 
 if __name__ == "__main__":
-    main()
+    main(
+        sample_path="/Users/ko23871/Documents/sample_selection/data/erass1cl_primary_v3.2.fits", 
+        schechter_clust_path="schechter_clusts_full.csv", 
+        full=True
+    )
